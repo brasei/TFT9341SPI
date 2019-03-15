@@ -23,11 +23,11 @@
     #define RESET 33
     #define DC 47
     #define LED 46
-#elif defined(__SAMD21G18A__)
-    #define CS 12
-    #define RESET 11
-    #define DC 10
-    #define LED 9
+#elif defined(__arm__)
+    #define CS 16
+    #define RESET 14
+    #define DC 17
+    #define LED 15
 #else  //elif defined(__ATmega328__)
 
     #define RESET  10
