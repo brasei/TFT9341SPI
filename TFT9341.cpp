@@ -12,7 +12,111 @@
 #include <pins_arduino.h>
 #include <SPI.h>
 
-#if defined(__arm__)
+#if defined(SAMD21)
+	/*
+	 * DMA
+	 *  
+	 */
+	 
+	//Declare DMAC Descriptors in main .ino to use globally (declare them 'extern' in here)
+	typedef struct {
+		uint16_t btctrl;
+		uint16_t btcnt;
+		uint32_t srcaddr;
+		uint32_t dstaddr;
+		uint32_t descaddr;
+	} dmacdescriptor ;
+
+	volatile dmacdescriptor wrb[12] __attribute__ ((aligned (16)));
+	dmacdescriptor descriptor_section[12] __attribute__ ((aligned (16)));
+	dmacdescriptor descriptor __attribute__ ((aligned (16)));
+
+	static uint32_t chnltx = 1, chnlrx = 2; // DMA channels
+	static uint8_t rxsink[1], txsrc[1] = {0xff};
+	volatile uint32_t dmadone;
+
+/* 	void DMAC_Handler() {
+		// interrupts DMAC_CHINTENCLR_TERR DMAC_CHINTENCLR_TCMPL DMAC_CHINTENCLR_SUSP
+		uint8_t active_channel;
+
+		// disable irqs ?
+		__disable_irq();
+		active_channel =  DMAC->INTPEND.reg & DMAC_INTPEND_ID_Msk; // get channel number
+		DMAC->CHID.reg = DMAC_CHID_ID(active_channel);
+		dmadone = DMAC->CHINTFLAG.reg;
+		DMAC->CHINTFLAG.reg = DMAC_CHINTENSET_MASK; // clear
+		//DMAC->CHINTFLAG.reg = DMAC_CHINTENCLR_TCMPL;
+		//DMAC->CHINTFLAG.reg = DMAC_CHINTENCLR_TERR;
+		//DMAC->CHINTFLAG.reg = DMAC_CHINTENCLR_SUSP;
+		__enable_irq();
+	}
+*/
+	void dma_init() {
+		// probably on by default
+		PM->AHBMASK.reg |= PM_AHBMASK_DMAC ;
+		PM->APBBMASK.reg |= PM_APBBMASK_DMAC ;
+		//NVIC_EnableIRQ( DMAC_IRQn ) ;
+		//NVIC_SetPriority( DMAC_IRQn, 3) ;
+
+		DMAC->BASEADDR.reg = (uint32_t)descriptor_section;
+		DMAC->WRBADDR.reg = (uint32_t)wrb;
+		DMAC->CTRL.reg = DMAC_CTRL_DMAENABLE | DMAC_CTRL_LVLEN(0xf);
+	}
+
+	Sercom *sercom = (Sercom   *)SERCOM3;  // SPI SERCOM
+
+	void spi_xfr(void *txdata, void *rxdata,  size_t n) {
+		uint32_t temp_CHCTRLB_reg;
+
+		// set up transmit channel  
+		DMAC->CHID.reg = DMAC_CHID_ID(chnltx); 
+		DMAC->CHCTRLA.reg &= ~DMAC_CHCTRLA_ENABLE;
+		DMAC->CHCTRLA.reg = DMAC_CHCTRLA_SWRST;
+		DMAC->SWTRIGCTRL.reg &= (uint32_t)(~(1 << chnltx));
+		temp_CHCTRLB_reg = DMAC_CHCTRLB_LVL(0) | 
+		  DMAC_CHCTRLB_TRIGSRC(SERCOM3_DMAC_ID_TX) | DMAC_CHCTRLB_TRIGACT_BEAT;
+		DMAC->CHCTRLB.reg = temp_CHCTRLB_reg;
+		DMAC->CHINTENSET.reg = DMAC_CHINTENSET_MASK ; // enable all 3 interrupts
+		dmadone = 0;
+		descriptor.descaddr = 0;
+		descriptor.dstaddr = (uint32_t) &sercom->SPI.DATA.reg;
+		descriptor.btcnt =  n;
+		descriptor.srcaddr = (uint32_t)txdata + n;
+		descriptor.btctrl =  DMAC_BTCTRL_SRCINC | DMAC_BTCTRL_VALID;
+		memcpy(&descriptor_section[chnltx],&descriptor, sizeof(dmacdescriptor));
+
+		// start tx channel
+		DMAC->CHID.reg = DMAC_CHID_ID(chnltx);
+		DMAC->CHCTRLA.reg |= DMAC_CHCTRLA_ENABLE;
+
+		while(!DMAC->INTSTATUS.bit.CHINT1) ;					// await DMA done isr (no handler used)
+		
+		DMAC->CHID.reg = DMAC_CHID_ID(chnltx);
+		DMAC->CHINTFLAG.reg = DMAC_CHINTENSET_MASK; 			// clear all
+		DMAC->CHCTRLA.reg &= ~DMAC_CHCTRLA_ENABLE;				//disable DMA to allow lib SPI 
+	}
+
+__attribute__((always_inline)) void spi_write(void *data,  size_t n) {
+		spi_xfr(data,rxsink,n);
+		//uint16_t i = 0;	
+		//while(n--) {
+		//	SPI.transfer(*((byte*)data+i));
+		//	i++;
+		//}
+	}
+	
+__attribute__((always_inline)) void spi_read(void *data,  size_t n) {
+		//xtype = DoRX;
+		//spi_xfr(txsrc,data,n);
+	}
+
+__attribute__((always_inline))	void spi_transfer(void *txdata, void *rxdata,  size_t n) {
+		//xtype = DoTXRX;
+		//spi_xfr(txdata,rxdata,n);
+	}
+
+
+#elif defined(__SAMD51__)
 	/*
 	 * DMA
 	 *  
@@ -36,7 +140,7 @@
 	static uint8_t rxsink[1], txsrc[1] = {0xff};
 	volatile uint32_t dmadone;
 
-	void DMAC_Handler() {
+ 	void DMAC0_Handler() {
 		// interrupts DMAC_CHINTENCLR_TERR DMAC_CHINTENCLR_TCMPL DMAC_CHINTENCLR_SUSP
 		uint8_t active_channel;
 
@@ -45,18 +149,19 @@
 		active_channel =  DMAC->INTPEND.reg & DMAC_INTPEND_ID_Msk; // get channel number
 		DMAC->CHID.reg = DMAC_CHID_ID(active_channel);
 		dmadone = DMAC->CHINTFLAG.reg;
-		DMAC->CHINTFLAG.reg = DMAC_CHINTENCLR_TCMPL; // clear
-		DMAC->CHINTFLAG.reg = DMAC_CHINTENCLR_TERR;
-		DMAC->CHINTFLAG.reg = DMAC_CHINTENCLR_SUSP;
+		DMAC->CHINTFLAG.reg = DMAC_CHINTENSET_MASK; // clear
+		//DMAC->CHINTFLAG.reg = DMAC_CHINTENCLR_TCMPL;
+		//DMAC->CHINTFLAG.reg = DMAC_CHINTENCLR_TERR;
+		//DMAC->CHINTFLAG.reg = DMAC_CHINTENCLR_SUSP;
 		__enable_irq();
 	}
 
 	void dma_init() {
 		// probably on by default
-		PM->AHBMASK.reg |= PM_AHBMASK_DMAC ;
-		PM->APBBMASK.reg |= PM_APBBMASK_DMAC ;
-		NVIC_EnableIRQ( DMAC_IRQn ) ;
-		NVIC_SetPriority( DMAC_IRQn, 5 ) ;
+		//PM->AHBMASK.reg |= PM_AHBMASK_DMAC ;
+		//PM->APBBMASK.reg |= PM_APBBMASK_DMAC ;
+		NVIC_EnableIRQ( DMAC0_IRQn ) ;
+		//NVIC_SetPriority( DMAC_IRQn, 3) ;
 
 		DMAC->BASEADDR.reg = (uint32_t)descriptor_section;
 		DMAC->WRBADDR.reg = (uint32_t)wrb;
@@ -71,12 +176,12 @@
 
 		// set up transmit channel  
 		DMAC->CHID.reg = DMAC_CHID_ID(chnltx); 
-		DMAC->CHCTRLA.reg &= ~DMAC_CHCTRLA_ENABLE;
-		DMAC->CHCTRLA.reg = DMAC_CHCTRLA_SWRST;
+		DMAC->Channel[0].CHCTRLA.reg &= ~DMAC_CHCTRLA_ENABLE;
+		DMAC->Channel[0].CHCTRLA.reg = DMAC_CHCTRLA_SWRST;
 		DMAC->SWTRIGCTRL.reg &= (uint32_t)(~(1 << chnltx));
 		temp_CHCTRLB_reg = DMAC_CHCTRLB_LVL(0) | 
 		  DMAC_CHCTRLB_TRIGSRC(SERCOM3_DMAC_ID_TX) | DMAC_CHCTRLB_TRIGACT_BEAT;
-		DMAC->CHCTRLB.reg = temp_CHCTRLB_reg;
+		DMAC->Channel[0].CHCTRLA.reg = temp_CHCTRLB_reg;
 		DMAC->CHINTENSET.reg = DMAC_CHINTENSET_MASK ; // enable all 3 interrupts
 		dmadone = 0;
 		descriptor.descaddr = 0;
@@ -89,16 +194,16 @@
 			descriptor.btctrl |= DMAC_BTCTRL_SRCINC;
 		}
 		memcpy(&descriptor_section[chnltx],&descriptor, sizeof(dmacdescriptor));
-
+/*
 		// rx channel    enable interrupts
- 		DMAC->CHID.reg = DMAC_CHID_ID(chnlrx); 
-		DMAC->CHCTRLA.reg &= ~DMAC_CHCTRLA_ENABLE;
-		DMAC->CHCTRLA.reg = DMAC_CHCTRLA_SWRST;
+		DMAC->CHID.reg = DMAC_CHID_ID(chnlrx); 
+		DMAC->Channel[0].CHCTRLA.reg &= ~DMAC_CHCTRLA_ENABLE;
+		DMAC->Channel[0].CHCTRLA.reg = DMAC_CHCTRLA_SWRST;
 		DMAC->SWTRIGCTRL.reg &= (uint32_t)(~(1 << chnlrx));
 		temp_CHCTRLB_reg = DMAC_CHCTRLB_LVL(0) | 
 		  DMAC_CHCTRLB_TRIGSRC(SERCOM3_DMAC_ID_RX) | DMAC_CHCTRLB_TRIGACT_BEAT;
 		DMAC->CHCTRLB.reg = temp_CHCTRLB_reg;
-		DMAC->CHINTENSET.reg = DMAC_CHINTENSET_MASK; // DISABLE INTERRUPTS		//DMAC_CHINTENSET_MASK ;  // enable all 3 interrupts
+		DMAC->CHINTENSET.reg = 0; // DISABLE INTERRUPTS		//DMAC_CHINTENSET_MASK ;  // enable all 3 interrupts
 		dmadone = 0;
 		descriptor.descaddr = 0;
 		descriptor.srcaddr = (uint32_t) &sercom->SPI.DATA.reg;
@@ -110,19 +215,19 @@
 			descriptor.btctrl |= DMAC_BTCTRL_DSTINC;
 		}
 		memcpy(&descriptor_section[chnlrx],&descriptor, sizeof(dmacdescriptor));
-
+*/
 		// start both channels  ? order matter ?
 		DMAC->CHID.reg = DMAC_CHID_ID(chnltx);
 		DMAC->CHCTRLA.reg |= DMAC_CHCTRLA_ENABLE;
-		DMAC->CHID.reg = DMAC_CHID_ID(chnlrx);
-		DMAC->CHCTRLA.reg |= DMAC_CHCTRLA_ENABLE;
+		//DMAC->CHID.reg = DMAC_CHID_ID(chnlrx);
+		//DMAC->CHCTRLA.reg |= DMAC_CHCTRLA_ENABLE;
 
 		while(!dmadone);  // await DMA done isr
 
-		DMAC->CHID.reg = DMAC_CHID_ID(chnltx);   //disable DMA to allow lib SPI 
-		DMAC->CHCTRLA.reg &= ~DMAC_CHCTRLA_ENABLE;
-//		DMAC->CHID.reg = DMAC_CHID_ID(chnlrx); 
-//		DMAC->CHCTRLA.reg &= ~DMAC_CHCTRLA_ENABLE;
+		DMAC->Channel[0].CHID.reg = DMAC_CHID_ID(chnltx);   //disable DMA to allow lib SPI 
+		DMAC->Channel[0].CHCTRLA.reg &= ~DMAC_CHCTRLA_ENABLE;
+		// DMAC->CHID.reg = DMAC_CHID_ID(chnlrx); 
+		// DMAC->CHCTRLA.reg &= ~DMAC_CHCTRLA_ENABLE;
 	}
 
 __attribute__((always_inline)) void spi_write(void *data,  size_t n) {
@@ -139,7 +244,7 @@ __attribute__((always_inline))	void spi_transfer(void *txdata, void *rxdata,  si
 		xtype = DoTXRX;
 		spi_xfr(txdata,rxdata,n);
 	}
-	
+
 #elif defined(__AVR__)
 
 __attribute__((always_inline))	void spi_write(void *data,  size_t n) {	
@@ -156,7 +261,36 @@ __attribute__((always_inline))	void spi_write(void *data,  size_t n) {
  * Pin setup
  *
  */
-#if defined(__arm__)
+#if defined(SAMD21)
+	
+	#define PINMODE(x,y) pinMode(x,y) 
+	#define SPI_TRANSFER(x) SPI.transfer(x)
+
+	volatile uint32_t *setCSPin = &PORT->Group[g_APinDescription[CS].ulPort].OUTSET.reg;
+	volatile uint32_t *clrCSPin = &PORT->Group[g_APinDescription[CS].ulPort].OUTCLR.reg;
+
+	volatile uint32_t *setDCPin = &PORT->Group[g_APinDescription[DC].ulPort].OUTSET.reg;
+	volatile uint32_t *clrDCPin = &PORT->Group[g_APinDescription[DC].ulPort].OUTCLR.reg;
+
+	volatile uint32_t *setLEDPin = &PORT->Group[g_APinDescription[LED].ulPort].OUTSET.reg;
+	volatile uint32_t *clrLEDPin = &PORT->Group[g_APinDescription[LED].ulPort].OUTCLR.reg;
+
+	volatile uint32_t *setRSTPin = &PORT->Group[g_APinDescription[RESET].ulPort].OUTSET.reg;
+	volatile uint32_t *clrRSTPin = &PORT->Group[g_APinDescription[RESET].ulPort].OUTCLR.reg;
+
+	#define TFT_CS_LOW  *clrCSPin = (1ul << g_APinDescription[CS].ulPin)
+	#define TFT_CS_HIGH  *setCSPin = (1ul << g_APinDescription[CS].ulPin)
+
+	#define TFT_DC_LOW   *clrDCPin = (1ul << g_APinDescription[DC].ulPin)
+	#define TFT_DC_HIGH  *setDCPin = (1ul << g_APinDescription[DC].ulPin)
+
+	#define TFT_RST_OFF *setRSTPin = (1ul << g_APinDescription[RESET].ulPin)
+	#define TFT_RST_ON  *clrRSTPin = (1ul << g_APinDescription[RESET].ulPin)
+
+	#define TFT_BL_OFF *clrLEDPin = (1ul << g_APinDescription[LED].ulPin)
+	#define TFT_BL_ON  *setLEDPin = (1ul << g_APinDescription[LED].ulPin)
+	
+#elif defined(__SAMD51__)
 	
 	#define PINMODE(x,y) pinMode(x,y) 
 	#define SPI_TRANSFER(x) SPI.transfer(x)
@@ -288,11 +422,16 @@ void TFT9341::InitLCD(uint8_t orientation) {
     TFT_BL_ON;
 	SPI.begin();
 
-#if defined(__arm__)
+#if defined(SAMD21)
 	SPI.setBitOrder(MSBFIRST);
 	SPI.setDataMode(SPI_MODE0);	
-	SPI.setClockDivider(2);
+	SPI.setClockDivider(3);
 	dma_init();
+#elif defined(__SAMD51__)
+	SPI.setBitOrder(MSBFIRST);
+	SPI.setDataMode(SPI_MODE0);	
+	SPI.setClockDivider(3);
+	//dma_init();
 #endif
 	
 	//reset

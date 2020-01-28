@@ -16,14 +16,18 @@
 #include "Arduino.h"
 #include "SPI.h"
 
-
 //pinout defs
 #if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
     #define CS 48
     #define RESET 33
     #define DC 47
     #define LED 46
-#elif defined(__arm__)
+#elif defined(SAMD21)
+    #define CS 16
+    #define RESET 14
+    #define DC 17
+    #define LED 15
+#elif defined(SAMD51)
     #define CS 16
     #define RESET 14
     #define DC 17
@@ -45,7 +49,7 @@
 /*
 #if defined(__AVR__)
 	#define SPI_MODE_FAST
-#elif defined(__arm__)     
+#elif defined(SAMD21)     
     #define SPI_MODE_DMA
 #endif
 */
